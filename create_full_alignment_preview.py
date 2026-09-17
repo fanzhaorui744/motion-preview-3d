@@ -302,6 +302,7 @@ HTML_TEMPLATE = r"""<!doctype html>
     #overview { height:150px; }
     #zoom { height:245px; }
     #scene3d { height:540px; cursor:grab; touch-action:none; }
+    #accCurves { height:520px; }
     .scene-toolbar { display:flex; align-items:center; gap:8px 10px; flex-wrap:wrap; padding:9px 11px; border-bottom:1px solid var(--line); background:#fbfcfc; font-size:12px; color:var(--muted); }
     .scene-toolbar select { min-height:30px; }
     .scene-toolbar label { display:inline-flex; align-items:center; gap:5px; white-space:nowrap; }
@@ -361,10 +362,41 @@ HTML_TEMPLATE = r"""<!doctype html>
       <div class="direction-grid" id="directionMetrics"></div>
       <div class="note">三端均使用初始三跳对齐后的 GT 世界系数据，这里不再额外平移时延。箭头是去重力加速度：Phone/Watch 已减去 +Y 重力，再做短期平滑；“只看水平加速度”会把 Y 置为 0。下方数值对当前选中直走段计算，X/Z 相关为正说明该轴方向一致，接近 0 说明只是时间/部位差异，为负说明该轴反着。</div>
     </section>
+    <section class="wide">
+      <h2>加速度曲线: GT / Phone / Watch · X / Y / Z</h2>
+      <div class="scene-toolbar">
+        <label for="accMode">模式</label>
+        <select id="accMode" aria-label="加速度曲线模式">
+          <option value="linear" selected>去重力 / 去漂移</option>
+          <option value="raw">原始含重力</option>
+        </select>
+        <label for="accWindow">窗口</label>
+        <select id="accWindow" aria-label="加速度曲线窗口">
+          <option value="12" selected>12 s</option>
+          <option value="30">30 s</option>
+          <option value="60">60 s</option>
+        </select>
+        <label for="accSmooth">平滑</label>
+        <select id="accSmooth" aria-label="加速度曲线平滑">
+          <option value="1">原始</option>
+          <option value="5">0.2 s</option>
+          <option value="10" selected>0.4 s</option>
+          <option value="20">0.8 s</option>
+        </select>
+      </div>
+      <canvas id="accCurves" role="img" aria-label="三端三轴加速度随时间变化曲线"></canvas>
+      <div class="legend">
+        <span><i class="swatch" style="background:var(--gt)"></i>GT</span>
+        <span><i class="swatch" style="background:var(--phone)"></i>Phone</span>
+        <span><i class="swatch" style="background:var(--watch)"></i>Watch</span>
+        <span>竖线是当前播放帧</span>
+      </div>
+      <div class="note">默认模式先去掉重力和低频漂移，更适合看动作峰值是否对齐；“原始含重力”显示原始加速度计读数，Phone/Watch 的 Y 轴会明显被 +9.8 m/s² 重力抬高。曲线峰值同时出现说明时间同步好；同一动作中 X/Z 符号和波形相似说明方向/坐标系一致。</div>
+    </section>
     <section>
       <h2>GT: 四 marker、质心与完整 X-Z 轨迹</h2>
       <canvas id="trajectory" role="img" aria-label="GT 四 marker 和质心完整轨迹"></canvas>
-      <div class="note">位置来自光学 GT。右下角放大当前帧 marker 几何；主图显示完整 307 秒轨迹及已播放部分。</div>
+      <div class="note">位置来自光学 GT。右下角放大当前帧 marker 几何；主图显示当前序列完整轨迹及已播放部分。</div>
     </section>
     <section>
       <h2>当前帧: GT / Phone / Watch 三轴响应</h2>
@@ -373,7 +405,7 @@ HTML_TEMPLATE = r"""<!doctype html>
       <div class="note">三组向量均为 GT/XINGYING 世界 XYZ；手机与手表是加速度计读数，包含重力和佩戴部位运动。</div>
     </section>
     <section class="wide">
-      <h2>完整 5 分钟动态强度总览</h2>
+      <h2>完整序列动态强度总览</h2>
       <canvas id="overview" role="img" aria-label="完整序列 GT 手机 手表动态强度"></canvas>
       <div class="legend"><span><i class="swatch" style="background:var(--gt)"></i>GT</span><span><i class="swatch" style="background:var(--phone)"></i>Phone</span><span><i class="swatch" style="background:var(--watch)"></i>Watch</span></div>
     </section>
@@ -389,7 +421,7 @@ HTML_TEMPLATE = r"""<!doctype html>
     const data=__PAYLOAD__; const sequenceOptions=__SEQUENCE_OPTIONS__;
     const colors={gt:'#d1493f',phone:'#087f8c',watch:'#8b5aa3',ink:'#17212b',muted:'#66747e',line:'#cbd4d8',path:'#9aa8ae',marker:['#168aad','#4f7cac','#f4a261','#6a994e']};
     const query=new URLSearchParams(location.search); const requestedTime=Number(query.get('t')); let cursor=Number.isFinite(requestedTime)?Math.max(0,Math.min(data.sample_count-1,Math.round(requestedTime*data.sample_hz))):0; let playing=query.get('autoplay')!=='0'; let previous=null;
-    const trajectory=document.querySelector('#trajectory'),tctx=trajectory.getContext('2d'); const vectors=document.querySelector('#vectors'),vctx=vectors.getContext('2d'); const overview=document.querySelector('#overview'),octx=overview.getContext('2d'); const zoom=document.querySelector('#zoom'),zctx=zoom.getContext('2d'); const timeline=document.querySelector('#timeline'); const play=document.querySelector('#play'); const speed=document.querySelector('#speed');
+    const trajectory=document.querySelector('#trajectory'),tctx=trajectory.getContext('2d'); const vectors=document.querySelector('#vectors'),vctx=vectors.getContext('2d'); const overview=document.querySelector('#overview'),octx=overview.getContext('2d'); const zoom=document.querySelector('#zoom'),zctx=zoom.getContext('2d'); const accCanvas=document.querySelector('#accCurves'),actx=accCanvas.getContext('2d'); const timeline=document.querySelector('#timeline'); const play=document.querySelector('#play'); const speed=document.querySelector('#speed');
     timeline.max=String(data.sample_count-1); timeline.value=String(Math.floor(cursor)); play.textContent=playing?'Pause':'Play';
     sequenceOptions.forEach(option=>{const element=document.createElement('option');element.value=option.href;element.textContent=option.label;if(option.sequence_id===data.sequence_id)element.selected=true;document.querySelector('#sequenceSelect').appendChild(element);});
     document.querySelector('#sequenceSelect').addEventListener('change',event=>{location.href=event.target.value;});
@@ -411,6 +443,12 @@ HTML_TEMPLATE = r"""<!doctype html>
     function drawSignalPlot(canvas,ctx,start,end,showWindow){const rect=fit(canvas,ctx),pad={left:42,right:15,top:16,bottom:24},width=rect.width-pad.left-pad.right,height=rect.height-pad.top-pad.bottom,x=i=>pad.left+((i-start)/Math.max(end-start,1))*width,y=v=>pad.top+(1-Math.min(v,1.15)/1.15)*height;ctx.clearRect(0,0,rect.width,rect.height);[0,.5,1].forEach(value=>{const py=y(value);path(ctx,[[pad.left,py],[rect.width-pad.right,py]],colors.line,1);});const stride=Math.max(1,Math.floor((end-start)/Math.max(width,1)));[['gt_energy',colors.gt],['phone_energy',colors.phone],['watch_energy',colors.watch]].forEach(([key,color])=>{const points=[];for(let i=start;i<=end;i+=stride)points.push([x(i),y(data[key][i])]);path(ctx,points,color,1.35);});const index=frameIndex();if(showWindow){const half=Math.round(6*data.sample_hz),left=Math.max(start,index-half),right=Math.min(end,index+half);ctx.fillStyle='rgba(23,33,43,.08)';ctx.fillRect(x(left),pad.top,Math.max(2,x(right)-x(left)),height);}const playX=x(index);path(ctx,[[playX,pad.top],[playX,rect.height-pad.bottom]],colors.ink,1,[3,3]);ctx.fillStyle=colors.muted;ctx.font='11px Arial';ctx.fillText(timeLabel(data.time_s[start]),pad.left,rect.height-6);const endLabel=timeLabel(data.time_s[end]);ctx.fillText(endLabel,rect.width-pad.right-39,rect.height-6);}
     function drawOverview(){drawSignalPlot(overview,octx,0,data.sample_count-1,true);}
     function drawZoom(){const index=frameIndex(),half=Math.round(6*data.sample_hz),start=Math.max(0,index-half),end=Math.min(data.sample_count-1,index+half);drawSignalPlot(zoom,zctx,start,end,false);}
+    function accelerationSeries(device,mode,width){if(mode==='raw')return data[device==='gt'?'gt_acc_mps2':device==='phone'?'phone_acc_mps2':'watch_acc_mps2'];return linearAcceleration(device,width);}
+    function drawAccCurves(){const rect=fit(accCanvas,actx),index=frameIndex(),mode=document.querySelector('#accMode').value,half=Math.round(Number(document.querySelector('#accWindow').value)/2*data.sample_hz),start=Math.max(0,index-half),end=Math.min(data.sample_count-1,index+half),width=Number(document.querySelector('#accSmooth').value);const series={gt:accelerationSeries('gt',mode,width),phone:accelerationSeries('phone',mode,width),watch:accelerationSeries('watch',mode,width)};actx.clearRect(0,0,rect.width,rect.height);const pad={left:48,right:16,top:10,bottom:18},plotWidth=rect.width-pad.left-pad.right,plotHeight=(rect.height-pad.top-pad.bottom-24)/3;const stride=Math.max(1,Math.floor((end-start)/Math.max(plotWidth,1)));
+      for(let axis=0;axis<3;axis++){let min=Infinity,max=-Infinity;Object.values(series).forEach(samples=>{for(let i=start;i<=end;i+=stride){min=Math.min(min,samples[i][axis]);max=Math.max(max,samples[i][axis]);}});if(!Number.isFinite(min)||!Number.isFinite(max)){min=-1;max=1;}const magnitude=Math.max(Math.abs(min),Math.abs(max),.5);min=Math.min(min,-magnitude*.08);max=Math.max(max,magnitude*.08);const top=pad.top+axis*(plotHeight+12),height=plotHeight,x=i=>pad.left+((i-start)/Math.max(end-start,1))*plotWidth,y=value=>top+(1-(value-min)/(max-min))*height;
+      actx.fillStyle=colors.muted;actx.font='bold 12px Arial';actx.fillText(['X','Y','Z'][axis]+' (m/s²)',6,top+13);path(actx,[[pad.left,top+height],[rect.width-pad.right,top+height]],colors.line,1);path(actx,[[pad.left,y(0)],[rect.width-pad.right,y(0)]],colors.line,1,[2,3]);['gt','phone','watch'].forEach(device=>{const points=[];for(let i=start;i<=end;i+=stride)points.push([x(i),y(series[device][i][axis])]);path(actx,points,colors[device],1.25);});
+      const playX=x(index);path(actx,[[playX,top],[playX,top+height]],colors.ink,1.3,[3,3]);actx.fillStyle=colors.muted;actx.font='10px Arial';if(axis===2){actx.fillText(timeLabel(data.time_s[start]),pad.left,rect.height-4);actx.fillText(timeLabel(data.time_s[end]),rect.width-pad.right-36,rect.height-4);}}
+      actx.font='10px Arial';actx.fillStyle=colors.muted;actx.textAlign='right';actx.fillText(mode==='raw'?'raw accelerometer · gravity included':'gravity + drift removed',rect.width-pad.right,8);actx.textAlign='left';}
     function updateText(){const i=frameIndex(),time=data.time_s[i],position=data.gt_position_m[i],metrics=[['GT position XYZ (m)',vectorText(position)],['GT acc XYZ (m/s²)',vectorText(data.gt_acc_mps2[i])],['Phone acc XYZ (m/s²)',vectorText(data.phone_acc_mps2[i])],['Watch acc XYZ (m/s²)',vectorText(data.watch_acc_mps2[i])],['Visible markers',String(data.gt_marker_valid[i].filter(Boolean).length)],['Frame',`${i+1} / ${data.sample_count}`],['Time',timeLabel(time)],['Path displacement',`${Math.hypot(position[0],position[2]).toFixed(2)} m`]];document.querySelector('#metrics').innerHTML=metrics.map(([key,value])=>`<div class="metric"><b>${key}</b><span>${value}</span></div>`).join('');document.querySelector('#clock').textContent=`${timeLabel(time)} / ${timeLabel(data.duration_s)}`;timeline.value=String(i);}
     function render(){drawTrajectory();drawVectors();drawOverview();drawZoom();updateText();document.documentElement.dataset.runtimeStatus='ok';}
     function loop(now){if(previous===null)previous=now;const elapsed=(now-previous)/1000;previous=now;if(playing){cursor+=elapsed*data.sample_hz*Number(speed.value);if(cursor>=data.sample_count)cursor=0;}render();requestAnimationFrame(loop);}
@@ -427,7 +465,8 @@ requestAnimationFrame(()=>{
     let sceneDragging=false,sceneLast=null;scene.addEventListener('pointerdown',event=>{sceneDragging=true;sceneLast=[event.clientX,event.clientY];scene.setPointerCapture(event.pointerId);scene.style.cursor='grabbing';});scene.addEventListener('pointermove',event=>{if(!sceneDragging)return;camera.yaw+=(event.clientX-sceneLast[0])*.008;camera.pitch=Math.max(-1.48,Math.min(1.48,camera.pitch+(event.clientY-sceneLast[1])*.006));sceneLast=[event.clientX,event.clientY];});scene.addEventListener('pointerup',event=>{sceneDragging=false;scene.style.cursor='grab';scene.releasePointerCapture(event.pointerId);});scene.addEventListener('wheel',event=>{event.preventDefault();camera.zoom=Math.max(.45,Math.min(3.2,camera.zoom*(event.deltaY>0?.92:1.08)));},{passive:false});
     document.querySelector('#segmentSelect').addEventListener('change',event=>{activeSegment=Number(event.target.value);directionCache={key:'',value:null};});document.querySelector('#jumpSegment').addEventListener('click',()=>{if(motionSegments[activeSegment]){cursor=motionSegments[activeSegment].start_index;playing=false;document.querySelector('#play').textContent='Play';}});document.querySelector('#topView').addEventListener('click',()=>{camera.pitch=1.28;});document.querySelector('#resetView').addEventListener('click',()=>{camera.yaw=-.48;camera.pitch=.53;camera.zoom=1;});document.querySelector('#smoothWindow').addEventListener('change',()=>{accelerationCache.clear();directionCache={key:'',value:null};});document.querySelector('#horizontalOnly').addEventListener('change',()=>{directionCache={key:'',value:null};});
 });
-    function sceneLoop(){drawScene3d();try{updateDirectionMetrics();}catch(error){document.querySelector('#directionMetrics').innerHTML='<div class=metric><b>Direction QA error</b><span>'+error.message+'</span></div>';}requestAnimationFrame(sceneLoop);}requestAnimationFrame(sceneLoop);
+    document.querySelector('#accMode').addEventListener('change',event=>{document.querySelector('#accSmooth').disabled=event.target.value==='raw';});
+    function sceneLoop(){drawScene3d();drawAccCurves();try{updateDirectionMetrics();}catch(error){document.querySelector('#directionMetrics').innerHTML='<div class=metric><b>Direction QA error</b><span>'+error.message+'</span></div>';}requestAnimationFrame(sceneLoop);}requestAnimationFrame(sceneLoop);
     // ==== Interactive 3D direction diagnostics ====
     const scene=document.querySelector('#scene3d'),sctx=scene.getContext('2d');
     const motionSegments=data.straight_segments||[];let activeSegment=0;const requestedSegment=Number(query.get('seg'));
